@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar WNBA</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏀</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Barlow+Semi+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#141a3a; --panel:#1d2550; --line:#2c3670; --text:#e9ecf8; --dim:#9aa3cc;
+  --amber:#ffb547; --home:#39d0bd; --away:#ff8a7a; --win:#5fe08a; --loss:#ff6b6b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.4 "Barlow Semi Condensed",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;
+  padding:18px 20px 14px;border-bottom:2px solid var(--amber)}
+h1{margin:0;font:700 32px/1 Oswald,sans-serif;letter-spacing:.5px}
+h1 small{display:block;font:400 14px "Barlow Semi Condensed";color:var(--dim);letter-spacing:0;margin-top:4px}
+.controls{display:flex;gap:8px;align-items:center}
+input[type=date],button{font:600 15px "Barlow Semi Condensed";background:var(--panel);color:var(--text);
+  border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+button{background:var(--amber);color:#1a1300;border-color:var(--amber);cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+#status{padding:10px 20px;color:var(--dim);min-height:20px}
+#status.err{color:var(--loss)}
+#status.warn{color:var(--amber)}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:4px 20px 24px}
+.game{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.meta{display:flex;justify-content:space-between;gap:8px;padding:7px 12px;font-size:13px;color:var(--dim);
+  border-bottom:1px solid var(--line)}
+.teams{padding:6px 12px}
+.team{display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:8px;padding:5px 0}
+.tag{font:700 11px Oswald;text-align:center;border-radius:4px;padding:2px 0}
+.tag.h{background:var(--home);color:#062521}.tag.a{background:var(--away);color:#2b0a06}
+.name{font:600 19px/1.1 Oswald,sans-serif}
+.name .rk{color:var(--amber);font-size:14px;margin-right:4px}
+.info{display:flex;gap:10px;font-size:14px;white-space:nowrap}
+.info .pos{color:var(--dim)}
+.W{color:var(--win);font-weight:700}.L{color:var(--loss);font-weight:700}
+.boxes{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 12px 10px}
+.box{border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.box.h{border-top:3px solid var(--home)}.box.a{border-top:3px solid var(--away)}
+.box h3{margin:0 0 3px;font:600 13px "Barlow Semi Condensed";color:var(--dim)}
+.box table{width:100%;border-collapse:collapse;font-size:14px}
+.box td{padding:1px 0}.box td:last-child{text-align:right;font-weight:700}
+.fb{color:var(--amber);cursor:help}
+.calc{background:#171e45;border-top:1px solid var(--line);padding:9px 12px 11px}
+.calc table{width:100%;border-collapse:collapse;font-size:14px}
+.calc th{font-weight:600;color:var(--dim);text-align:right;padding:2px 4px;font-size:12px}
+.calc th:first-child,.calc td:first-child{text-align:left}
+.calc td{padding:3px 4px;text-align:right;border-top:1px solid var(--line)}
+.score{font:700 16px Oswald}
+.score .h{color:var(--home)}.score .a{color:var(--away)}
+.line{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.line b{font:700 20px Oswald;color:var(--amber)}
+.line span{color:var(--dim);font-size:13px}
+.sep{height:8px}
+.empty{grid-column:1/-1;padding:40px 10px;text-align:center;color:var(--dim)}
+footer{padding:0 20px 28px;color:var(--dim);font-size:13px;max-width:900px}
+footer p{margin:4px 0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+details{padding:0 20px 10px;color:var(--dim);font-size:13px}
+@media (max-width:420px){main{grid-template-columns:1fr;padding:4px 10px 20px}header{padding:14px 12px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Radar WNBA<small>Partidos del día con posiciones, promedios y proyecciones</small></h1>
+  <div class="controls">
+    <label for="date" class="sr">Fecha</label>
+    <input type="date" id="date">
+    <button id="load">Actualizar</button>
+  </div>
+</header>
+<div id="status" role="status" aria-live="polite"></div>
+<details id="warnbox" hidden><summary>Avisos de datos</summary><ul id="warnlist"></ul></details>
+<main id="games"></main>
+<footer>
+  <p>Datos: TeamRankings.com. El local se mide con sus números jugando en casa y la visita con sus números fuera. <span class="fb">*</span> = sin partidos en esa condición, se usa el promedio de la temporada.</p>
+  <p>Marcador A: local en casa vs visita fuera. B: promedio de temporada de ambos. C: últimos 3 partidos. Total = puntos local + puntos visita. Hándicap = local − visita; si es positivo, el local es favorito por esa cantidad.</p>
+</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const f1 = (v) => (v == null || !isFinite(v) ? "—" : v.toFixed(1));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+// Valor según condición: local usa "home", visita usa "away"; si falta, usa temporada (marcado)
+function pick(stat, side) {
+  if (!stat) return { v: null, fb: false };
+  const split = side === "home" ? stat.home : stat.away;
+  if (split != null) return { v: split, fb: false };
+  return { v: stat.season ?? null, fb: stat.season != null };
+}
+const cell = (p) => p.v == null ? "—" : `${f1(p.v)}${p.fb ? ' <span class="fb" title="Sin partidos en esta condición: promedio de temporada">*</span>' : ""}`;
+
+function spreadText(d) {
+  if (d == null || !isFinite(d)) return "—";
+  if (Math.abs(d) < 0.05) return "Pick'em";
+  return d > 0 ? `Local −${d.toFixed(1)}` : `Visita −${(-d).toFixed(1)}`;
+}
+const signed = (d) => (d == null || !isFinite(d) ? "—" : (d > 0 ? "+" : "") + d.toFixed(1));
+
+// Marcador exacto: redondea y evita empate (no hay empates en básquet)
+function exact(l, v) {
+  if (l == null || v == null) return null;
+  let L = Math.round(l), V = Math.round(v);
+  if (L === V) { if (l >= v) L++; else V++; }
+  return { L, V, total: l + v, diff: l - v };
+}
+
+function streakHtml(s) {
+  if (!s) return "—";
+  const c = /^W/i.test(s) ? "W" : /^L/i.test(s) ? "L" : "";
+  return `<span class="${c}">${esc(s)}</span>`;
+}
+
+function teamRow(t, side) {
+  const st = t.standing;
+  const pct = st && st.pct != null ? (st.pct * 100).toFixed(1) + "%" : "—";
+  const pos = st ? `${st.pos}º ${st.conf}` : "—";
+  return `<div class="team">
+    <span class="tag ${side === "home" ? "h" : "a"}">${side === "home" ? "LOCAL" : "VISITA"}</span>
+    <span class="name">${t.rank ? `<span class="rk">#${t.rank}</span>` : ""}${esc(t.name)}</span>
+    <span class="info"><span class="pos">${pos}</span><span>${pct}</span>${streakHtml(st && st.streak)}</span>
+  </div>`;
+}
+
+function box(t, side) {
+  const cls = side === "home" ? "h" : "a";
+  const title = side === "home" ? `${esc(t.name)} en casa` : `${esc(t.name)} fuera`;
+  return `<div class="box ${cls}"><h3>${title}</h3><table>
+    <tr><td>Pts 1er cuarto</td><td>${cell(pick(t.q1, side))}</td></tr>
+    <tr><td>Pts 1ª mitad</td><td>${cell(pick(t.h1, side))}</td></tr>
+    <tr><td>Pts juego</td><td>${cell(pick(t.pts, side))}</td></tr>
+    <tr><td>Rebotes</td><td>${cell(pick(t.reb, side))}</td></tr>
+  </table></div>`;
+}
+
+function calc(g) {
+  const H = g.home, A = g.away;
+  const scen = [
+    ["A · Casa/fuera", pick(H.pts, "home").v, pick(A.pts, "away").v],
+    ["B · Temporada", H.pts?.season ?? null, A.pts?.season ?? null],
+    ["C · Últimos 3", H.pts?.last3 ?? null, A.pts?.last3 ?? null],
+  ].map(([n, l, v]) => [n, exact(l, v)]);
+
+  const main = scen[0][1];
+  const lineHtml = main
+    ? `<div class="line"><div>Total <b>${f1(main.total)}</b></div><div>Spread <b>${spreadText(main.diff)}</b></div></div>`
+    : `<div class="line"><span>Sin datos suficientes para la proyección</span></div>`;
+
+  const rows = scen.map(([n, s]) => s
+    ? `<tr><td>${n}</td><td class="score"><span class="h">${s.L}</span>–<span class="a">${s.V}</span></td><td>${f1(s.total)}</td><td>${signed(s.diff)}</td></tr>`
+    : `<tr><td>${n}</td><td>—</td><td>—</td><td>—</td></tr>`).join("");
+
+  const per = [["1er cuarto", "q1"], ["1ª mitad", "h1"], ["Juego", "pts"]].map(([n, k]) => {
+    const l = pick(H[k], "home").v, v = pick(A[k], "away").v;
+    const ok = l != null && v != null;
+    return `<tr><td>${n}</td><td>${ok ? f1(l + v) : "—"}</td><td>${ok ? signed(l - v) : "—"}</td><td>${ok ? spreadText(l - v) : "—"}</td></tr>`;
+  }).join("");
+
+  return `<div class="calc">${lineHtml}
+    <table><tr><th>Marcador posible</th><th>L–V</th><th>Total</th><th>Hándicap</th></tr>${rows}</table>
+    <div class="sep"></div>
+    <table><tr><th>Periodo</th><th>Total</th><th>Hándicap</th><th>Spread</th></tr>${per}</table>
+  </div>`;
+}
+
+function render(data, fromCache) {
+  const el = $("#games");
+  if (!data.games || !data.games.length) {
+    el.innerHTML = `<div class="empty">No hay partidos de WNBA en esta fecha. Elige otro día en el calendario de arriba.</div>`;
+  } else {
+    el.innerHTML = data.games.map((g) => `<article class="game">
+      <div class="meta"><span>${esc(g.time)}${g.location ? " · " + esc(g.location) : ""}${g.neutral ? " · neutral" : ""}</span>
+        ${g.hotness != null ? `<span title="Hotness score de TeamRankings">🔥 ${f1(g.hotness)}</span>` : ""}</div>
+      <div class="teams">${teamRow(g.home, "home")}${teamRow(g.away, "away")}</div>
+      <div class="boxes">${box(g.home, "home")}${box(g.away, "away")}</div>
+      ${calc(g)}
+    </article>`).join("");
+  }
+  const when = new Date(data.updated).toLocaleString("es-EC");
+  const st = $("#status");
+  st.className = fromCache ? "warn" : "";
+  st.textContent = fromCache
+    ? `No se pudo conectar con TeamRankings. Mostrando datos guardados del ${when}.`
+    : `${data.games.length} partido(s) · actualizado ${when}`;
+
+  const w = data.warnings || [];
+  $("#warnbox").hidden = !w.length;
+  $("#warnlist").innerHTML = w.map((x) => `<li>${esc(x)}</li>`).join("");
+}
+
+async function load() {
+  const date = $("#date").value || todayStr();
+  const btn = $("#load");
+  btn.disabled = true; btn.textContent = "Cargando…";
+  $("#status").className = ""; $("#status").textContent = "Leyendo TeamRankings…";
+  const cacheKey = "wnba-radar:" + date;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 25000);
+    const r = await fetch(`/api/wnba?date=${date}`, { signal: ctrl.signal });
+    clearTimeout(t);
+    let data;
+    try { data = await r.json(); } catch { throw new Error(`respuesta no válida (HTTP ${r.status})`); }
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch {}
+    render(data, false);
+  } catch (e) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(cacheKey) || "null"); } catch {}
+    if (saved) render(saved, true);
+    else {
+      $("#games").innerHTML = "";
+      $("#status").className = "err";
+      $("#status").textContent = `No se pudieron cargar los datos: ${e.name === "AbortError" ? "tiempo de espera agotado" : e.message}. Pulsa Actualizar para reintentar.`;
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = "Actualizar";
+  }
+}
+
+$("#date").value = todayStr();
+$("#load").addEventListener("click", load);
+$("#date").addEventListener("change", load);
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "wnba-radar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Radar de partidos WNBA con datos de TeamRankings.com",
+  "engines": { "node": ">=18" }
+}
