@@ -10,6 +10,13 @@ const URLS = {
   reb: `${BASE}/stat/total-rebounds-per-game`,
 };
 
+const PLAYER_STATS = {
+  pts: `${BASE}/player-stat/points`,
+  ast: `${BASE}/player-stat/assists`,
+  reb: `${BASE}/player-stat/rebounds`,
+};
+const TOP_PLAYERS = 5;
+
 const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
@@ -27,6 +34,8 @@ const ALIASES = {
 
 const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z]/g, "");
 const key = (s) => { const k = norm(s); return ALIASES[k] || k; };
+const cleanTeam = (s) => String(s || "").replace(/\(\d+-\d+(-\d+)?\)/g, "").replace(/^#\d+\s+/, "").trim();
+const pkey = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function num(v) {
@@ -36,7 +45,7 @@ function num(v) {
 }
 
 // ---------- descarga con reintento y límite de tiempo ----------
-async function getHtml(url, tries = 2, timeoutMs = 4000) {
+async function getHtml(url, tries = 2, timeoutMs = 3500) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
     const ctrl = new AbortController();
@@ -183,6 +192,140 @@ function parseStat(html) {
   return map;
 }
 
+// ---------- estadísticas de jugadores ----------
+// Busca la tabla con columnas de jugador, equipo y valor. Si la cabecera no las nombra,
+// las deduce del contenido (columna con nombres de personas, columna con equipos, última numérica).
+const RE_PLAYER = /player|^name$|athlete/i;
+const RE_TEAM = /team|school|college/i;
+const RE_VALUE = /^value$|per\s*game|^avg|average|^ppg$|^apg$|^rpg$|^pts$|^ast$|^reb$|points|assists|rebounds/i;
+
+function parsePlayers(html) {
+  const tables = parseTables(html).filter((t) => t.rows.length >= 3);
+  if (!tables.length) throw new Error("tabla de jugadores no encontrada");
+  let best = null;
+  for (const t of tables) {
+    const hi = t.rows.findIndex((r) => r.some((c) => RE_PLAYER.test(c)) && r.some((c) => RE_TEAM.test(c)));
+    let iP = -1, iT = -1, iV = -1, start = 0;
+    if (hi >= 0) {
+      const hdr = t.rows[hi];
+      iP = hdr.findIndex((c) => RE_PLAYER.test(c));
+      iT = hdr.findIndex((c, i) => i !== iP && RE_TEAM.test(c));
+      iV = hdr.findIndex((c, i) => i !== iP && i !== iT && RE_VALUE.test(c));
+      start = hi + 1;
+    } else {
+      // Deducción por contenido: texto sin dígitos en 2 columnas (jugador = la que tiene más palabras)
+      const body = t.rows.filter((r) => r.length >= 3).slice(0, 30);
+      if (body.length < 3) continue;
+      const cols = Math.max(...body.map((r) => r.length));
+      const textCols = [];
+      for (let i = 0; i < cols; i++) {
+        const vals = body.map((r) => r[i] || "");
+        const txt = vals.filter((v) => /[a-z]/i.test(v) && !/\d/.test(v)).length;
+        const avgLen = vals.reduce((n, v) => n + v.length, 0) / vals.length;
+        // descarta columnas cortas tipo posición (G, F, C, G-F)
+        if (txt >= body.length * 0.8 && avgLen > 3) textCols.push({ i, uniq: new Set(vals).size / vals.length });
+      }
+      if (textCols.length < 2) continue;
+      // Jugador = la columna con más valores distintos (los equipos se repiten); empate = la primera
+      textCols.sort((x, y) => y.uniq - x.uniq || x.i - y.i);
+      iP = textCols[0].i; iT = textCols[1].i;
+    }
+    const byTeam = {};
+    let n = 0;
+    for (const r of t.rows.slice(start)) {
+      if (!r[iP] || !r[iT] || RE_PLAYER.test(r[iP])) continue;
+      let v = iV >= 0 ? num(r[iV]) : null;
+      if (v == null) for (let i = r.length - 1; i >= 0; i--) { if (i === iP || i === iT) continue; v = num(r[i]); if (v != null) break; }
+      if (v == null) continue;
+      const tk = key(cleanTeam(r[iT]));
+      (byTeam[tk] ||= {})[pkey(r[iP])] = { name: r[iP], team: r[iT], v };
+      n++;
+    }
+    if (!best || n > best.n) best = { n, byTeam };
+  }
+  if (!best || !best.n) throw new Error("tabla de jugadores no encontrada");
+  return best.byTeam;
+}
+
+// Las páginas de jugadores escriben el equipo con su apodo ("BYU Cougars", "Iowa State Cyclones",
+// "North Carolina Tar Heels"). Se quita el apodo palabra por palabra desde el final hasta que el
+// nombre coincide EXACTO con un equipo conocido; así "Iowa State Cyclones" nunca cae en "Iowa".
+// La página de jugadores usa el nombre completo ("Las Vegas Aces", "Golden State Valkyries").
+// Se quita el apodo (máx. 2 palabras) hasta que coincide EXACTO con un equipo conocido.
+function teamFromPlayerPage(raw, known) {
+  const words = cleanTeam(raw).split(/\s+/).filter(Boolean);
+  for (let drop = 0; drop <= 2 && drop < words.length; drop++) {
+    const k = key(words.slice(0, words.length - drop).join(" "));
+    if (known.has(k)) return { k, drop };
+  }
+  return null;
+}
+
+// Reagrupa las 3 tablas de jugadores por la clave de equipo del calendario.
+// Si dos equipos distintos de la página de jugadores apuntan al mismo equipo, gana el que
+// necesitó quitar menos palabras (el otro se descarta en vez de mezclar jugadores).
+function remapAllPlayers(players, known) {
+  const raws = new Map(); // nombre crudo -> {k, drop}
+  for (const map of Object.values(players)) {
+    if (!map) continue;
+    for (const [rawKey, plist] of Object.entries(map)) {
+      const team = Object.values(plist)[0].team;
+      if (raws.has(team)) continue;
+      raws.set(team, known.has(rawKey) ? { k: rawKey, drop: 0 } : teamFromPlayerPage(team, known));
+    }
+  }
+  const bestDrop = {};
+  for (const r of raws.values()) if (r) bestDrop[r.k] = Math.min(bestDrop[r.k] ?? 9, r.drop);
+  const out = {};
+  for (const [name, map] of Object.entries(players)) {
+    if (!map) { out[name] = null; continue; }
+    const m = {};
+    for (const plist of Object.values(map)) {
+      const r = raws.get(Object.values(plist)[0].team);
+      if (!r || r.drop !== bestDrop[r.k]) continue;
+      Object.assign((m[r.k] ||= {}), plist);
+    }
+    out[name] = m;
+  }
+  return out;
+}
+
+function topPlayers(players, teamName) {
+  const tk = key(teamName);
+  const byPts = players.pts?.[tk];
+  if (!byPts) return null;
+  return Object.entries(byPts)
+    .sort((a, b) => b[1].v - a[1].v)
+    .slice(0, TOP_PLAYERS)
+    .map(([pk, p]) => ({
+      name: p.name,
+      team: p.team,
+      pts: p.v,
+      ast: players.ast?.[tk]?.[pk]?.v ?? null,
+      reb: players.reb?.[tk]?.[pk]?.v ?? null,
+    }));
+}
+
+// Diagnóstico: /api/wnba?debug=players muestra cómo vienen las páginas de jugadores
+async function debugPlayers() {
+  const out = {};
+  for (const [k, u] of Object.entries(PLAYER_STATS)) {
+    try {
+      const r = await fetch(u, { headers: HEADERS });
+      const html = await r.text();
+      const tables = parseTables(html);
+      out[k] = {
+        url: u, status: r.status, bytes: html.length, tables: tables.length,
+        muestra: tables.slice(0, 4).map((t) => ({ filas: t.rows.length, primeras: t.rows.slice(0, 4) })),
+        pistas: ["datatable", "tr-table", "json", "__NEXT_DATA__", "ajax", "player"].filter((w) => html.includes(w)),
+      };
+      try { const m = parsePlayers(html); out[k].equipos = Object.keys(m).length; out[k].ejemploEquipos = Object.keys(m).slice(0, 8); }
+      catch (e) { out[k].error = e.message; }
+    } catch (e) { out[k] = { url: u, error: e.message }; }
+  }
+  return out;
+}
+
 function find(map, name) {
   if (!map) return null;
   const k = key(name);
@@ -202,14 +345,17 @@ const json = (body, status, extra = {}) =>
 
 export default async (req) => {
   const url = new URL(req.url);
+  if (url.searchParams.get("debug") === "players")
+    return json(await debugPlayers(), 200, { "Cache-Control": "no-store" });
   const date = url.searchParams.get("date");
   const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
   const scheduleUrl = `${BASE}/schedules/${validDate ? `?date=${validDate}` : ""}`;
 
-  const names = ["schedule", "standings", "q1", "h1", "pts", "reb"];
+  const names = ["schedule", "standings", "q1", "h1", "pts", "reb", "p_pts", "p_ast", "p_reb"];
   const results = await Promise.allSettled([
     getHtml(scheduleUrl),
     ...["standings", "q1", "h1", "pts", "reb"].map((k) => getHtml(URLS[k])),
+    ...["pts", "ast", "reb"].map((k) => getHtml(PLAYER_STATS[k])),
   ]);
 
   const warnings = [];
@@ -241,6 +387,24 @@ export default async (req) => {
     reb: safe("reb", parseStat, html.reb),
   };
 
+  // Jugadores: se leen las 3 tablas y se agrupan por el equipo del calendario
+  let players = {};
+  for (const k of ["pts", "ast", "reb"]) players[k] = safe(`p_${k}`, parsePlayers, html[`p_${k}`]);
+  const known = new Set([
+    ...Object.values(stats).flatMap((m) => Object.keys(m || {})),
+    ...Object.keys(standings || {}),
+    ...games.flatMap((g) => [key(g.home), key(g.away)]),
+  ]);
+  const rawPlayerTeams = players.pts ? Object.keys(players.pts).length : 0;
+  const samplePlayerTeams = players.pts ? Object.values(players.pts).slice(0, 3).map((m) => Object.values(m)[0].team) : [];
+  players = remapAllPlayers(players, known);
+  // El equipo del calendario se busca con la misma tolerancia que las estadísticas de equipo
+  const playersFor = (name) => {
+    let k = key(name);
+    if (!players.pts?.[k]) { const hit = find(Object.fromEntries(Object.keys(players.pts || {}).map((x) => [x, x])), name); if (hit) k = hit; }
+    return topPlayers(players, k);
+  };
+
   const team = (name, rank) => {
     const t = {
       name, rank,
@@ -249,7 +413,9 @@ export default async (req) => {
       h1: find(stats.h1, name),
       pts: find(stats.pts, name),
       reb: find(stats.reb, name),
+      players: null,
     };
+    t.players = playersFor(name);
     const loaded = { standing: standings, q1: stats.q1, h1: stats.h1, pts: stats.pts, reb: stats.reb };
     const missing = Object.keys(loaded).filter((k) => loaded[k] && !t[k]);
     if (missing.length)
@@ -262,6 +428,9 @@ export default async (req) => {
     home: team(g.home, g.homeRank),
     away: team(g.away, g.awayRank),
   }));
+
+  if (players.pts && out.length && !out.some((g) => g.home.players || g.away.players))
+    warnings.push(`Jugadores: la tabla cargó (${rawPlayerTeams} equipos) pero ningún equipo de esta fecha aparece en ella. Ej.: ${samplePlayerTeams.join(", ")}`);
 
   return json(
     { ok: true, date: validDate, updated: new Date().toISOString(), games: out, warnings },
