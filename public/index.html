@@ -59,6 +59,17 @@ main{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:
 .line b{font:700 20px Oswald;color:var(--amber)}
 .line span{color:var(--dim);font-size:13px}
 .sep{height:8px}
+.pl{border-top:1px solid var(--line);padding:9px 12px 11px}
+.pl h4{margin:0 0 4px;font:600 13px "Barlow Semi Condensed";color:var(--dim)}
+.pl table{width:100%;border-collapse:collapse;font-size:13.5px}
+.pl th{font-weight:600;color:var(--dim);font-size:12px;text-align:right;padding:2px 3px}
+.pl td{padding:2px 3px;text-align:right;border-top:1px solid var(--line)}
+.pl th:nth-child(-n+2),.pl td:nth-child(-n+2){text-align:left}
+.pl td:first-child{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl td:nth-child(2){color:var(--dim);max-width:115px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl tr.side td{border-top:0;padding-top:6px;font-weight:700;text-align:left}
+.pl tr.side.h td{color:var(--home)}.pl tr.side.a td{color:var(--away)}
+.pl .none{color:var(--dim);font-size:13px;text-align:left}
 .empty{grid-column:1/-1;padding:40px 10px;text-align:center;color:var(--dim)}
 footer{padding:0 20px 28px;color:var(--dim);font-size:13px;max-width:900px}
 footer p{margin:4px 0}
@@ -82,6 +93,7 @@ details{padding:0 20px 10px;color:var(--dim);font-size:13px}
 <main id="games"></main>
 <footer>
   <p>Datos: TeamRankings.com. El local se mide con sus números jugando en casa y la visita con sus números fuera. <span class="fb">*</span> = sin partidos en esa condición, se usa el promedio de la temporada.</p>
+  <p>Jugadores: las 5 con más puntos por juego de cada equipo; — = no está entre las líderes de esa estadística en TeamRankings.</p>
   <p>Marcador A: local en casa vs visita fuera. B: promedio de temporada de ambos. C: últimos 3 partidos. Total = puntos local + puntos visita. Hándicap = local − visita; si es positivo, el local es favorito por esa cantidad.</p>
 </footer>
 
@@ -177,6 +189,18 @@ function calc(g) {
   </div>`;
 }
 
+function playersBox(H, A) {
+  const part = (t, cls) => {
+    const head = `<tr class="side ${cls}"><td colspan="5">${esc(t.name)}</td></tr>`;
+    if (!t.players || !t.players.length) return head + `<tr><td colspan="5" class="none">Sin datos de jugadoras</td></tr>`;
+    return head + t.players.map((p) =>
+      `<tr><td title="${esc(p.name)}">${esc(p.name)}</td><td title="${esc(p.team)}">${esc(p.team)}</td><td>${f1(p.pts)}</td><td>${f1(p.ast)}</td><td>${f1(p.reb)}</td></tr>`).join("");
+  };
+  return `<div class="pl"><h4>Top 5 jugadoras por puntos (promedio por juego)</h4>
+    <table><tr><th>Jugadora</th><th>Equipo</th><th>PTS</th><th>AST</th><th>REB</th></tr>
+    ${part(H, "h")}${part(A, "a")}</table></div>`;
+}
+
 function render(data, fromCache) {
   const el = $("#games");
   if (!data.games || !data.games.length) {
@@ -188,6 +212,7 @@ function render(data, fromCache) {
       <div class="teams">${teamRow(g.home, "home")}${teamRow(g.away, "away")}</div>
       <div class="boxes">${box(g.home, "home")}${box(g.away, "away")}</div>
       ${calc(g)}
+      ${playersBox(g.home, g.away)}
     </article>`).join("");
   }
   const when = new Date(data.updated).toLocaleString("es-EC");
