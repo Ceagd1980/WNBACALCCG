@@ -70,6 +70,14 @@ main{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:
 .pl tr.side td{border-top:0;padding-top:6px;font-weight:700;text-align:left}
 .pl tr.side.h td{color:var(--home)}.pl tr.side.a td{color:var(--away)}
 .pl .none{color:var(--dim);font-size:13px;text-align:left}
+.calc h4{margin:8px 0 3px;font:600 13px "Barlow Semi Condensed";color:var(--dim)}
+.pct{font:700 16px Oswald;white-space:nowrap}.pct.h{color:var(--home)}.pct.a{color:var(--away)}
+.fav{outline:2px solid var(--amber);outline-offset:-2px;border-radius:4px}
+.sub{color:var(--dim);font-size:12px}
+.final{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:2px 10px;padding:6px 12px;background:#101634;border-bottom:1px solid var(--line);font-size:14px}
+.final > span:first-child{flex-basis:100%}
+.final b{font:700 18px Oswald}.final .h{color:var(--home)}.final .a{color:var(--away)}
+.final .chk2{color:var(--dim);font-size:12.5px}.ok{color:var(--win)}.bad{color:var(--loss)}
 .empty{grid-column:1/-1;padding:40px 10px;text-align:center;color:var(--dim)}
 footer{padding:0 20px 28px;color:var(--dim);font-size:13px;max-width:900px}
 footer p{margin:4px 0}
@@ -94,6 +102,7 @@ details{padding:0 20px 10px;color:var(--dim);font-size:13px}
 <footer>
   <p>Datos: TeamRankings.com. El local se mide con sus números jugando en casa y la visita con sus números fuera. <span class="fb">*</span> = sin partidos en esa condición, se usa el promedio de la temporada.</p>
   <p>Jugadores: las 5 con más puntos por juego de cada equipo; — = no está entre las líderes de esa estadística en TeamRankings.</p>
+  <p>% ganador: ganados ÷ jugados (General = récord total; LL = local en casa; VV = visita fuera). 1X2: Local = (ganados local + perdidos visita) ÷ partidos de ambos; Visita = (ganados visita + perdidos local) ÷ partidos de ambos. En partidos ya jugados se muestra el marcador final, si el favorito del 1X2 acertó y el total real contra el proyectado.</p>
   <p>Marcador A: local en casa vs visita fuera. B: promedio de temporada de ambos. C: últimos 3 partidos. Total = puntos local + puntos visita. Hándicap = local − visita; si es positivo, el local es favorito por esa cantidad.</p>
 </footer>
 
@@ -159,6 +168,60 @@ function box(t, side) {
   </table></div>`;
 }
 
+// ---------- % ganador y 1X2 (con los récords de la tabla de posiciones) ----------
+// General = récord total. LL = local EN CASA. VV = visita FUERA.
+const pctTxt = (v) => (v == null || !isFinite(v) ? "—" : (v * 100).toFixed(1) + "%");
+function recOf(txt) {
+  const m = /(\d+)\s*-\s*(\d+)/.exec(txt || "");
+  return m && +m[1] + +m[2] > 0 ? { w: +m[1], l: +m[2], gp: +m[1] + +m[2] } : null;
+}
+const wpct = (r) => (r ? r.w / r.gp : null);
+function x12(L, V) {
+  if (!L || !V) return null;
+  const n = L.gp + V.gp;
+  return { h: (L.w + V.l) / n, a: (V.w + L.l) / n };
+}
+function probs(g) {
+  const sh = g.home.standing, sa = g.away.standing;
+  const Lg = recOf(sh && sh.record), Vg = recOf(sa && sa.record);
+  const Ls = g.neutral ? null : recOf(sh && sh.homeRecord), Vs = g.neutral ? null : recOf(sa && sa.roadRecord);
+  return { Lg, Vg, Ls, Vs, xg: x12(Lg, Vg), xs: x12(Ls, Vs) };
+}
+function probBox(g) {
+  const { Lg, Vg, Ls, Vs, xg, xs } = probs(g);
+  const r = (x) => (x ? ` <span class="sub">${x.w}-${x.l}</span>` : "");
+  const pc = (x, k) => (x ? `<span class="pct ${k}${x[k] > x[k === "h" ? "a" : "h"] ? " fav" : ""}">${pctTxt(x[k])}</span>` : "—");
+  return `<h4>% ganador (ganados ÷ jugados)</h4>
+    <table><tr><th></th><th>Local</th><th>Visita</th></tr>
+      <tr><td>General</td><td>${pctTxt(wpct(Lg))}${r(Lg)}</td><td>${pctTxt(wpct(Vg))}${r(Vg)}</td></tr>
+      <tr><td>LL / VV${g.neutral ? " (neutral)" : ""}</td><td>${pctTxt(wpct(Ls))}${r(Ls)}</td><td>${pctTxt(wpct(Vs))}${r(Vs)}</td></tr>
+    </table>
+    <h4>1X2 · probabilidad de ganar</h4>
+    <table><tr><th></th><th>Local</th><th>Visita</th></tr>
+      <tr><td>General</td><td>${pc(xg, "h")}</td><td>${pc(xg, "a")}</td></tr>
+      <tr><td>LL / VV</td><td>${pc(xs, "h")}</td><td>${pc(xs, "a")}</td></tr>
+    </table>
+    <h4>Marcadores y hándicap</h4>`;
+}
+
+// ---------- marcador final (partidos ya jugados) ----------
+function finalBox(g) {
+  if (g.homeScore == null || g.awayScore == null)
+    return g.result ? `<div class="final"><span>Final: <b>${esc(g.result)}</b></span></div>` : "";
+  const hs = g.homeScore, as = g.awayScore, total = hs + as;
+  const { xg, xs } = probs(g);
+  const x = xs || xg;
+  let fav = "";
+  if (x && hs !== as && Math.abs(x.h - x.a) > 0.001) {
+    const side = x.h > x.a ? "Local" : "Visita", won = (side === "Local") === (hs > as);
+    fav = `<span class="chk2">Favorito 1X2 (${side}): <span class="${won ? "ok" : "bad"}">${won ? "acertó" : "falló"}</span></span>`;
+  }
+  const lh = pick(g.home.pts, "home").v, la = pick(g.away.pts, "away").v;
+  const proj = lh != null && la != null
+    ? `<span class="chk2">Total real ${total} · proyectado ${(lh + la).toFixed(1)} (${total > lh + la ? "Over" : "Under"}) · Spread real ${hs - as > 0 ? "+" : ""}${hs - as}</span>` : "";
+  return `<div class="final"><span>Final <span class="h">${esc(g.home.name)}</span> <b class="h">${hs}</b> – <b class="a">${as}</b> <span class="a">${esc(g.away.name)}</span></span>${fav}${proj}</div>`;
+}
+
 function calc(g) {
   const H = g.home, A = g.away;
   const scen = [
@@ -183,6 +246,7 @@ function calc(g) {
   }).join("");
 
   return `<div class="calc">${lineHtml}
+    ${probBox(g)}
     <table><tr><th>Marcador posible</th><th>L–V</th><th>Total</th><th>Hándicap</th></tr>${rows}</table>
     <div class="sep"></div>
     <table><tr><th>Periodo</th><th>Total</th><th>Hándicap</th><th>Spread</th></tr>${per}</table>
@@ -207,8 +271,9 @@ function render(data, fromCache) {
     el.innerHTML = `<div class="empty">No hay partidos de WNBA en esta fecha. Elige otro día en el calendario de arriba.</div>`;
   } else {
     el.innerHTML = data.games.map((g) => `<article class="game">
-      <div class="meta"><span>${esc(g.time)}${g.location ? " · " + esc(g.location) : ""}${g.neutral ? " · neutral" : ""}</span>
+      <div class="meta"><span>${[g.time, g.location, g.neutral ? "neutral" : ""].filter(Boolean).map(esc).join(" · ")}</span>
         ${g.hotness != null ? `<span title="Hotness score de TeamRankings">🔥 ${f1(g.hotness)}</span>` : ""}</div>
+      ${finalBox(g)}
       <div class="teams">${teamRow(g.home, "home")}${teamRow(g.away, "away")}</div>
       <div class="boxes">${box(g.home, "home")}${box(g.away, "away")}</div>
       ${calc(g)}
