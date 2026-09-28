@@ -117,13 +117,25 @@ function parseSchedule(html) {
     const txt = (r[iM] || "").replace(/\(\d+-\d+\)/g, "").trim();
     const mm = txt.match(/^(?:#(\d+)\s+)?(.+?)\s+(at|vs\.?|@)\s+(?:#(\d+)\s+)?(.+)$/i);
     if (!mm) continue;
+    // Partido jugado: marcador junto a cada equipo ("Minnesota 88 at Indiana 80")
+    // o en otra celda ("88-80", "Final 88-80").
+    const splitScore = (raw) => { const m = /^(.*?)\s+(\d{2,3})\s*$/.exec(raw.trim()); return m ? [m[1].trim(), +m[2]] : [raw.trim(), null]; };
+    let [away, awayScore] = splitScore(mm[2]);
+    let [home, homeScore] = splitScore(mm[5]);
+    if (awayScore == null || homeScore == null) {
+      awayScore = homeScore = null; away = mm[2].trim(); home = mm[5].trim();
+    }
+    let time = iTime >= 0 ? r[iTime] || "" : "";
+    let result = "";
+    const scoreCell = r.find((c, i) => i !== iM && /^\D*\d{2,3}\s*[-–]\s*\d{2,3}\D*$/.test(c) && !/\d{1,2}:\d{2}/.test(c));
+    if (awayScore == null && scoreCell) result = scoreCell.trim();
+    if (/final/i.test(time) || (scoreCell && time === scoreCell)) { if (!result && awayScore == null) result = time; time = ""; }
     games.push({
-      away: mm[2].trim(),
+      away, home, awayScore, homeScore, result,
       awayRank: mm[1] ? +mm[1] : null,
-      home: mm[5].trim(),
       homeRank: mm[4] ? +mm[4] : null,
       neutral: !/^(at|@)$/i.test(mm[3]),
-      time: iTime >= 0 ? r[iTime] || "" : "",
+      time,
       location: iLoc >= 0 ? r[iLoc] || "" : "",
       hotness: iHot >= 0 ? num(r[iHot]) : null,
     });
@@ -425,6 +437,7 @@ export default async (req) => {
 
   const out = games.map((g) => ({
     time: g.time, location: g.location, hotness: g.hotness, neutral: g.neutral,
+    homeScore: g.homeScore, awayScore: g.awayScore, result: g.result,
     home: team(g.home, g.homeRank),
     away: team(g.away, g.awayRank),
   }));
