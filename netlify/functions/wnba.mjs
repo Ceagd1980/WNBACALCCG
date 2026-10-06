@@ -349,6 +349,77 @@ function find(map, name) {
   return hit ? map[hit] : null;
 }
 
+// ---------- fuerza relativa: últimos 5 resultados de cada equipo (página del equipo) ----------
+// Respaldo si el calendario no trae el enlace del equipo
+const TEAM_SLUGS = {
+  atlanta: "atlanta-dream", chicago: "chicago-sky", connecticut: "connecticut-sun", dallas: "dallas-wings",
+  goldenstate: "golden-state-valkyries", indiana: "indiana-fever", lasvegas: "las-vegas-aces",
+  losangeles: "los-angeles-sparks", minnesota: "minnesota-lynx", newyork: "new-york-liberty",
+  phoenix: "phoenix-mercury", seattle: "seattle-storm", washington: "washington-mystics",
+  portland: "portland-fire", toronto: "toronto-tempo",
+};
+function teamSlugs(html) {
+  const out = {};
+  const re = /<a[^>]*href="[^"]*\/wnba\/team\/([a-z0-9-]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) { const k = key(cleanTeam(decode(m[2]))); if (k && !out[k]) out[k] = m[1]; }
+  return out;
+}
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+// "10/04", "10/04/2026", "Oct 4", "2026-10-04" → "2026-10-04" (año del día consultado si no viene)
+function isoFrom(txt, refIso) {
+  const t = String(txt || "").trim();
+  let y = null, mo = null, d = null, m;
+  if ((m = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(t))) [y, mo, d] = [+m[1], +m[2], +m[3]];
+  else if ((m = /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(t))) { mo = +m[1]; d = +m[2]; if (m[3]) y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; }
+  else if ((m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})/.exec(t)) && MONTHS[m[1].toLowerCase()]) { mo = MONTHS[m[1].toLowerCase()]; d = +m[2]; }
+  if (!mo || !d) return null;
+  if (!y) { const [ry, rm] = refIso.split("-").map(Number); y = mo - rm > 6 ? ry - 1 : ry; }
+  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+// Resultados jugados de la página del equipo: busca la columna de resultado ("W 88-80") y la de fecha
+function parseForm(html, beforeIso) {
+  const games = [];
+  let order = 0;
+  for (const t of parseTables(html)) {
+    const hi = t.rows.findIndex((r) => r.some((c) => /^(result|w\/l)$/i.test(c.trim())));
+    if (hi < 0) continue;
+    const hdr = t.rows[hi];
+    const iD = hdr.findIndex((c) => /^date$/i.test(c.trim()));
+    const iR = hdr.findIndex((c) => /^result$/i.test(c.trim()));
+    const iWL = hdr.findIndex((c) => /^w\/l$/i.test(c.trim()));
+    for (const r of t.rows.slice(hi + 1)) {
+      let wl = null;
+      const rc = iR >= 0 ? (r[iR] || "").trim() : "";
+      let m = /^([WL])\b\s*(\d+)\s*[-–]\s*(\d+)/i.exec(rc);
+      if (m) wl = m[1].toUpperCase();
+      else if (iWL >= 0 && /^[WL]$/i.test((r[iWL] || "").trim())) wl = r[iWL].trim().toUpperCase();
+      if (!wl) continue;
+      const date = iD >= 0 ? isoFrom(r[iD], beforeIso) : null;
+      games.push({ date, wl, order: order++, score: m ? `${m[2]}-${m[3]}` : "" });
+    }
+  }
+  const dated = games.every((g) => g.date);
+  let list = dated ? games.filter((g) => g.date < beforeIso).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order) : games;
+  const last = list.slice(-5);
+  if (!last.length) return null;
+  return { fr: last.reduce((n, g) => n + (g.wl === "W" ? 1 : -1), 0), last: last.map((g) => ({ wl: g.wl, date: g.date, score: g.score })), dated };
+}
+async function teamForm(slug, beforeIso, timeoutMs) {
+  const html = await getHtml(`${BASE}/team/${slug}`, 1, timeoutMs);
+  return parseForm(html, beforeIso);
+}
+function ecToday() {
+  const d = new Date(Date.now() - 5 * 3600 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+async function debugTeam(slug) {
+  const r = await fetch(`${BASE}/team/${slug}`, { headers: HEADERS });
+  const html = await r.text();
+  const tables = parseTables(html);
+  return { status: r.status, bytes: html.length, tables: tables.map((t) => ({ filas: t.rows.length, primeras: t.rows.slice(0, 4) })).slice(0, 6), form: parseForm(html, ecToday()) };
+}
+
 const json = (body, status, extra = {}) =>
   new Response(JSON.stringify(body), {
     status,
@@ -359,13 +430,31 @@ export default async (req) => {
   const url = new URL(req.url);
   if (url.searchParams.get("debug") === "players")
     return json(await debugPlayers(), 200, { "Cache-Control": "no-store" });
+  if (url.searchParams.get("debug") === "team")
+    return json(await debugTeam(String(url.searchParams.get("slug") || "atlanta-dream").replace(/[^a-z0-9-]/g, "")), 200, { "Cache-Control": "no-store" });
+  const T0 = Date.now();
   const date = url.searchParams.get("date");
   const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
   const scheduleUrl = `${BASE}/schedules/${validDate ? `?date=${validDate}` : ""}`;
 
   const names = ["schedule", "standings", "q1", "h1", "pts", "reb", "p_pts", "p_ast", "p_reb"];
+  const refIso = validDate || ecToday();
+  const schedP = getHtml(scheduleUrl);
+  // Fuerza relativa: en cuanto llega el calendario se leen las páginas de los equipos del día
+  const formsP = schedP.then(async (sh) => {
+    const slugs = teamSlugs(sh), out = {}, errs = [];
+    const keys = [...new Set(parseSchedule(sh).flatMap((g) => [key(g.home), key(g.away)]))];
+    const left = Math.max(1200, Math.min(3500, 8800 - (Date.now() - T0)));
+    await Promise.all(keys.map(async (k) => {
+      const slug = slugs[k] || TEAM_SLUGS[k] || Object.entries(TEAM_SLUGS).find(([x]) => x.startsWith(k) || k.startsWith(x))?.[1];
+      if (!slug) { errs.push(`${k}: sin enlace de equipo`); return; }
+      try { out[k] = await teamForm(slug, refIso, left); if (!out[k]) errs.push(`${slug}: sin resultados`); }
+      catch (e) { errs.push(`${slug}: ${e.message}`); }
+    }));
+    return { out, errs };
+  }).catch(() => ({ out: {}, errs: [] }));
   const results = await Promise.allSettled([
-    getHtml(scheduleUrl),
+    schedP,
     ...["standings", "q1", "h1", "pts", "reb"].map((k) => getHtml(URLS[k])),
     ...["pts", "ast", "reb"].map((k) => getHtml(PLAYER_STATS[k])),
   ]);
@@ -417,6 +506,8 @@ export default async (req) => {
     return topPlayers(players, k);
   };
 
+  const forms = await formsP;
+  if (forms.errs.length) warnings.push(`Fuerza relativa: ${forms.errs.join(" · ")}`);
   const team = (name, rank) => {
     const t = {
       name, rank,
@@ -426,6 +517,7 @@ export default async (req) => {
       pts: find(stats.pts, name),
       reb: find(stats.reb, name),
       players: null,
+      form: forms.out[key(name)] || null,
     };
     t.players = playersFor(name);
     const loaded = { standing: standings, q1: stats.q1, h1: stats.h1, pts: stats.pts, reb: stats.reb };
