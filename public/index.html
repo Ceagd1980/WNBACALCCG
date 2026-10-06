@@ -156,7 +156,7 @@ function streakHtml(s) {
 
 // Fuerza relativa: últimos 5 partidos, +1 por victoria y −1 por derrota
 function frHtml(f) {
-  if (!f || f.fr == null) return "";
+  if (!f || f.fr == null || !f.last || !f.last.length) return "";
   const det = f.last.map((x) => x.wl + (x.score ? " " + x.score : "") + (x.date ? " (" + x.date.slice(5).split("-").reverse().join("/") + ")" : "")).join(", ");
   const tip = `Fuerza relativa (últimos ${f.last.length}): ${f.last.map((x) => x.wl).join(" ")} → ${det}`;
   return `<span class="fr ${f.fr > 0 ? "pos" : f.fr < 0 ? "neg" : ""}" title="${esc(tip)}">FR ${f.fr > 0 ? "+" : ""}${f.fr}</span>`;
