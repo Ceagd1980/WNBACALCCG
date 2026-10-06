@@ -78,6 +78,13 @@ main{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:
 .final > span:first-child{flex-basis:100%}
 .final b{font:700 18px Oswald}.final .h{color:var(--home)}.final .a{color:var(--away)}
 .final .chk2{color:var(--dim);font-size:12.5px}.ok{color:var(--win)}.bad{color:var(--loss)}
+.fr{font:700 12px Oswald;white-space:nowrap;display:inline-block;padding:0 5px;border-radius:4px;margin-left:6px;vertical-align:3px;cursor:help;background:#2a3263;color:var(--dim)}
+.fr.pos{background:#173d2a;color:var(--win)}.fr.neg{background:#45191d;color:var(--loss)}
+.flame{font:700 13px Oswald;padding:1px 8px;border-radius:12px;background:#3a2a10;color:var(--amber);white-space:nowrap}
+.flame.hot{background:var(--amber);color:#1a1300}
+.game.hot{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+.final.hit{background:#0f2a1c}.final.miss{background:#2e1216}
+.mark{font:700 18px Oswald;margin-left:6px}
 .empty{grid-column:1/-1;padding:40px 10px;text-align:center;color:var(--dim)}
 footer{padding:0 20px 28px;color:var(--dim);font-size:13px;max-width:900px}
 footer p{margin:4px 0}
@@ -103,6 +110,7 @@ details{padding:0 20px 10px;color:var(--dim);font-size:13px}
   <p>Datos: TeamRankings.com. El local se mide con sus números jugando en casa y la visita con sus números fuera. <span class="fb">*</span> = sin partidos en esa condición, se usa el promedio de la temporada.</p>
   <p>Jugadores: las 5 con más puntos por juego de cada equipo; — = no está entre las líderes de esa estadística en TeamRankings.</p>
   <p>% ganador: ganados ÷ jugados (General = récord total; LL = local en casa; VV = visita fuera). 1X2: Local = (ganados local + perdidos visita) ÷ partidos de ambos; Visita = (ganados visita + perdidos local) ÷ partidos de ambos. En partidos ya jugados se muestra el marcador final, si el favorito del 1X2 acertó y el total real contra el proyectado.</p>
+  <p>🔥 Confianza: probabilidad 1X2 del favorito (promedio de General y LL/VV); desde 70% se resalta. En partidos jugados: ✓ verde si ganó el favorito, ✗ rojo si no. FR = fuerza relativa: de los últimos 5 partidos, +1 por victoria y −1 por derrota (positivo = viene en racha ganadora). TR = hotness de TeamRankings.</p>
   <p>Marcador A: local en casa vs visita fuera. B: promedio de temporada de ambos. C: últimos 3 partidos. Total = puntos local + puntos visita. Hándicap = local − visita; si es positivo, el local es favorito por esa cantidad.</p>
 </footer>
 
@@ -146,13 +154,20 @@ function streakHtml(s) {
   return `<span class="${c}">${esc(s)}</span>`;
 }
 
+// Fuerza relativa: últimos 5 partidos, +1 por victoria y −1 por derrota
+function frHtml(f) {
+  if (!f || f.fr == null) return "";
+  const det = f.last.map((x) => x.wl + (x.score ? " " + x.score : "") + (x.date ? " (" + x.date.slice(5).split("-").reverse().join("/") + ")" : "")).join(", ");
+  const tip = `Fuerza relativa (últimos ${f.last.length}): ${f.last.map((x) => x.wl).join(" ")} → ${det}`;
+  return `<span class="fr ${f.fr > 0 ? "pos" : f.fr < 0 ? "neg" : ""}" title="${esc(tip)}">FR ${f.fr > 0 ? "+" : ""}${f.fr}</span>`;
+}
 function teamRow(t, side) {
   const st = t.standing;
   const pct = st && st.pct != null ? (st.pct * 100).toFixed(1) + "%" : "—";
   const pos = st ? `${st.pos}º ${st.conf}` : "—";
   return `<div class="team">
     <span class="tag ${side === "home" ? "h" : "a"}">${side === "home" ? "LOCAL" : "VISITA"}</span>
-    <span class="name">${t.rank ? `<span class="rk">#${t.rank}</span>` : ""}${esc(t.name)}</span>
+    <span class="name">${t.rank ? `<span class="rk">#${t.rank}</span>` : ""}${esc(t.name)}${frHtml(t.form)}</span>
     <span class="info"><span class="pos">${pos}</span><span>${pct}</span>${streakHtml(st && st.streak)}</span>
   </div>`;
 }
@@ -187,6 +202,16 @@ function probs(g) {
   const Ls = g.neutral ? null : recOf(sh && sh.homeRecord), Vs = g.neutral ? null : recOf(sa && sa.roadRecord);
   return { Lg, Vg, Ls, Vs, xg: x12(Lg, Vg), xs: x12(Ls, Vs) };
 }
+// Confianza 🔥: probabilidad 1X2 del favorito (promedio de General y LL/VV cuando hay ambos)
+const HOT = 0.70;
+function confidence(g) {
+  const { xg, xs } = probs(g);
+  const xx = [xg, xs].filter(Boolean);
+  if (!xx.length) return null;
+  const h = xx.reduce((n, x) => n + x.h, 0) / xx.length, a = xx.reduce((n, x) => n + x.a, 0) / xx.length;
+  if (Math.abs(h - a) < 0.001) return null;
+  return h > a ? { side: "Local", p: h } : { side: "Visita", p: a };
+}
 function probBox(g) {
   const { Lg, Vg, Ls, Vs, xg, xs } = probs(g);
   const r = (x) => (x ? ` <span class="sub">${x.w}-${x.l}</span>` : "");
@@ -209,17 +234,18 @@ function finalBox(g) {
   if (g.homeScore == null || g.awayScore == null)
     return g.result ? `<div class="final"><span>Final: <b>${esc(g.result)}</b></span></div>` : "";
   const hs = g.homeScore, as = g.awayScore, total = hs + as;
-  const { xg, xs } = probs(g);
-  const x = xs || xg;
-  let fav = "";
-  if (x && hs !== as && Math.abs(x.h - x.a) > 0.001) {
-    const side = x.h > x.a ? "Local" : "Visita", won = (side === "Local") === (hs > as);
-    fav = `<span class="chk2">Favorito 1X2 (${side}): <span class="${won ? "ok" : "bad"}">${won ? "acertó" : "falló"}</span></span>`;
+  const c = confidence(g);
+  let fav = "", cls = "", mark = "";
+  if (c && hs !== as) {
+    const won = (c.side === "Local") === (hs > as);
+    cls = won ? " hit" : " miss";
+    mark = `<span class="mark ${won ? "ok" : "bad"}" title="${won ? "Se acertó el ganador" : "No se acertó el ganador"}">${won ? "✓" : "✗"}</span>`;
+    fav = `<span class="chk2">🔥 ${c.side} ${(c.p * 100).toFixed(0)}%: <span class="${won ? "ok" : "bad"}">${won ? "acertó" : "falló"}</span></span>`;
   }
   const lh = pick(g.home.pts, "home").v, la = pick(g.away.pts, "away").v;
   const proj = lh != null && la != null
     ? `<span class="chk2">Total real ${total} · proyectado ${(lh + la).toFixed(1)} (${total > lh + la ? "Over" : "Under"}) · Spread real ${hs - as > 0 ? "+" : ""}${hs - as}</span>` : "";
-  return `<div class="final"><span>Final <span class="h">${esc(g.home.name)}</span> <b class="h">${hs}</b> – <b class="a">${as}</b> <span class="a">${esc(g.away.name)}</span></span>${fav}${proj}</div>`;
+  return `<div class="final${cls}"><span>Final <span class="h">${esc(g.home.name)}</span> <b class="h">${hs}</b> – <b class="a">${as}</b> <span class="a">${esc(g.away.name)}</span>${mark}</span>${fav}${proj}</div>`;
 }
 
 function calc(g) {
@@ -270,15 +296,16 @@ function render(data, fromCache) {
   if (!data.games || !data.games.length) {
     el.innerHTML = `<div class="empty">No hay partidos de WNBA en esta fecha. Elige otro día en el calendario de arriba.</div>`;
   } else {
-    el.innerHTML = data.games.map((g) => `<article class="game">
+    el.innerHTML = data.games.map((g) => { const c = confidence(g), hot = c && c.p >= HOT; return `<article class="game${hot ? " hot" : ""}">
       <div class="meta"><span>${[g.time, g.location, g.neutral ? "neutral" : ""].filter(Boolean).map(esc).join(" · ")}</span>
-        ${g.hotness != null ? `<span title="Hotness score de TeamRankings">🔥 ${f1(g.hotness)}</span>` : ""}</div>
+        <span>${c ? `<span class="flame${hot ? " hot" : ""}" title="Confianza: probabilidad 1X2 del favorito (promedio General y LL/VV). Resaltado desde 70%">🔥 ${c.side} ${(c.p * 100).toFixed(0)}%</span>` : ""}
+        ${g.hotness != null ? `<span title="Hotness score de TeamRankings"> TR ${f1(g.hotness)}</span>` : ""}</span></div>
       ${finalBox(g)}
       <div class="teams">${teamRow(g.home, "home")}${teamRow(g.away, "away")}</div>
       <div class="boxes">${box(g.home, "home")}${box(g.away, "away")}</div>
       ${calc(g)}
       ${playersBox(g.home, g.away)}
-    </article>`).join("");
+    </article>`; }).join("");
   }
   const when = new Date(data.updated).toLocaleString("es-EC");
   const st = $("#status");
