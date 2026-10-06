@@ -402,8 +402,14 @@ function parseForm(html, beforeIso) {
   const dated = games.every((g) => g.date);
   let list = dated ? games.filter((g) => g.date < beforeIso).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order) : games;
   const last = list.slice(-5);
-  if (!last.length) return null;
-  return { fr: last.reduce((n, g) => n + (g.wl === "W" ? 1 : -1), 0), last: last.map((g) => ({ wl: g.wl, date: g.date, score: g.score })), dated };
+  // Resultado del propio día consultado (el calendario de TeamRankings no trae el marcador de días pasados)
+  const on = dated ? games.find((g) => g.date === beforeIso) : null;
+  if (!last.length && !on) return null;
+  return {
+    fr: last.length ? last.reduce((n, g) => n + (g.wl === "W" ? 1 : -1), 0) : null,
+    last: last.map((g) => ({ wl: g.wl, date: g.date, score: g.score })), dated,
+    on: on ? { wl: on.wl, score: on.score } : null,
+  };
 }
 async function teamForm(slug, beforeIso, timeoutMs) {
   const html = await getHtml(`${BASE}/team/${slug}`, 1, timeoutMs);
@@ -527,6 +533,17 @@ export default async (req) => {
     return t;
   };
 
+  // Marcador de partidos ya jugados sacado de la página de cada equipo (W/L del local + puntos)
+  for (const g of games) {
+    if (g.homeScore != null || g.result) continue;
+    const fh = forms.out[key(g.home)]?.on, fa = forms.out[key(g.away)]?.on;
+    const src = fh || (fa && { wl: fa.wl === "W" ? "L" : "W", score: fa.score });
+    const m = src && /(\d+)-(\d+)/.exec(src.score || "");
+    if (!m) continue;
+    const hi = Math.max(+m[1], +m[2]), lo = Math.min(+m[1], +m[2]);
+    if (hi === lo) continue;
+    [g.homeScore, g.awayScore] = src.wl === "W" ? [hi, lo] : [lo, hi];
+  }
   const out = games.map((g) => ({
     time: g.time, location: g.location, hotness: g.hotness, neutral: g.neutral,
     homeScore: g.homeScore, awayScore: g.awayScore, result: g.result,
